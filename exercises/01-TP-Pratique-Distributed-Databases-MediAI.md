@@ -70,8 +70,9 @@ SELECT citus_add_node('citus_worker3', 5432);
 
 **Question 1.2.a** : Quelle est la différence entre un **coordinator** et un **worker** dans Citus ?
 
-> **Votre réponse :**
-> 
+> **ma réponse :**
+> le **coordinator** (nœud maître) est le point d'entrée unique du cluster : il reçoit toutes les requêtes SQL des clients, les analyse, les décompose en sous-requêtes, et les distribue aux workers appropriés.il maintient les métadonnées de distribution (quels shards sont sur quels workers) dans les tables système Citus (pg_dist_node, pg_dist_shard, etc.). Il agrège ensuite les résultats et les renvoie au client. Il ne stocke pas les données utilisateur.
+Les workers sont les nœuds de stockage et de calcul: ils hébergent physiquement les shards (fragments) des tables distribuées et exécutent les sous-requêtes qui leur sont déléguées par le coordinator. Chaque worker est une instance PostgreSQL + Citus indépendante. Dans notre cluster : citus_worker1 = Tunis, citus_worker2 = Montréal, citus_worker3 = Tokyo.
 > _______________________________________________
 
 **Question 1.2.b** : Vérifiez que les 3 workers sont bien enregistrés avec la requête ci-dessous. Combien de lignes obtenez-vous ?
