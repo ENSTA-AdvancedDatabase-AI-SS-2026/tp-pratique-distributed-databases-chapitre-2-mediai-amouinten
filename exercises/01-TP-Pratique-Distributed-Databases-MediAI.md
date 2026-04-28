@@ -84,8 +84,18 @@ ORDER BY nodeid;
 ```
 
 > **Résultat et réponse :**
-> 
-> _______________________________________________
+>
+> ```
+>  nodeid |    nodename    | nodeport | isactive
+> --------+----------------+----------+----------
+>       1 | citus_worker1  |     5432 | t
+>       2 | citus_worker2  |     5432 | t
+>       3 | citus_worker3  |     5432 | t
+> (3 rows)
+> ```
+>
+> On obtient **3 lignes**, une par worker, toutes avec `isactive = t` (true). Cela confirme que les 3 workers (Tunis, Montréal, Tokyo) sont bien enregistrés et actifs dans le cluster.
+
 
 ---
 
