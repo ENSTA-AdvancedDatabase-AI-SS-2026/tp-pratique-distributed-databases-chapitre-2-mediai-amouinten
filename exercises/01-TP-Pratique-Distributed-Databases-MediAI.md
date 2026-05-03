@@ -698,17 +698,17 @@ Le **Two-Phase Commit (2PC)** garantit qu'une transaction distribuée est **atom
 **Question 4.1** : Décrivez dans vos propres mots les deux phases du 2PC. Que se passe-t-il si un worker répond `ABORT` en Phase 1 ?
 
 > **Phase 1 (Prepare) :**
-> 
-> _______________________________________________
-
+>
+> Le coordinator envoie un message **PREPARE** à tous les workers participants. Chaque worker doit alors exécuter sa partie de la transaction et écrire les modifications dans un **journal de reprise** (WAL/redo log), sans les valider définitivement. Si tout s'est bien passé, chaque worker répond **READY** (« je suis prêt à committer »). Si un worker a rencontré un problème (contrainte violée, panne, timeout), il répond **ABORT**. Pendant cette phase, les workers maintiennent les verrous sur les données modifiées.
+ 
 > **Phase 2 (Commit) :**
-> 
-> _______________________________________________
-
-> **Si un worker répond ABORT :**
-> 
-> _______________________________________________
-
+>
+> Si le coordinator a reçu **READY** de **tous** les workers, il envoie un message **COMMIT** à tous. Chaque worker valide alors sa transaction localement (rend les modifications permanentes) et relâche ses verrous. Si le coordinator reçoit au moins un **ABORT**, il envoie un message **ROLLBACK** à tous les workers qui avaient répondu READY, pour qu'ils annulent leurs modifications. Le coordinator enregistre la décision finale dans son propre journal avant d'envoyer les messages de Phase 2 (pour résister aux pannes).
+ 
+> **Si un worker répond ABORT en Phase 1 :**
+>
+> Le coordinator **abandonne la transaction entière** et envoie un message **ROLLBACK PREPARED** à tous les workers qui avaient répondu READY. L'atomicité est garantie : soit la transaction est commité partout, soit elle est annulée partout. Aucune modification partielle n'est rendue visible. Dans notre cas SQL PostgreSQL : `ROLLBACK PREPARED 'nom_transaction'`.
+ 
 ---
 
 ### 4.2 – Simulation d'un 2PC en SQL PostgreSQL (15 pts)
@@ -741,13 +741,14 @@ VALUES (16, 'Japan', NOW(), 'consultation', 15000, 'JPY', 'pending');
 PREPARE TRANSACTION 'mediAI_urgence_yuki_2024';
 ```
 
-📸 **Capture d'écran** : exécution du PREPARE TRANSACTION
-
-> **Collez votre capture ici :**
-> 
+> **Capture d'écran attendue :**
 > ```
-> [VOTRE CAPTURE]
+> BEGIN
+> INSERT 0 1
+> INSERT 0 1
+> PREPARE TRANSACTION
 > ```
+> PostgreSQL répond `PREPARE TRANSACTION` sans erreur, indiquant que la transaction est suspendue et en attente de validation finale.
 
 #### ✏️ Exercice 4.2.b – Vérifier les transactions préparées
 
@@ -759,7 +760,11 @@ FROM pg_prepared_xacts;
 
 **Question 4.2.b** : Que contient la colonne `gid` ? À quoi sert-elle dans le protocole 2PC ?
 
-> _______________________________________________
+> **Réponse :**
+> La colonne `gid` (**Global Transaction Identifier**) contient l'identifiant unique de la transaction préparée, ici `'mediAI_urgence_yuki_2024'`. Dans le protocole 2PC, le `gid` est l'identifiant global qui permet au coordinator d'identifier la transaction **de manière unique sur tous les nœuds du cluster distribué**. Il sert à :
+> - Retrouver la transaction préparée pour la valider (`COMMIT PREPARED 'gid'`) ou l'annuler (`ROLLBACK PREPARED 'gid'`),
+> - En cas de panne du coordinator pendant la Phase 2, permettre à un administrateur ou au système de reprise de retrouver les transactions en attente via `pg_prepared_xacts` et de les terminer manuellement,
+> - Garantir que le COMMIT ou ROLLBACK s'applique bien à la bonne transaction (unicité globale)
 
 #### ✏️ Exercice 4.2.c – Phase 2 : COMMIT ou ROLLBACK
 
@@ -777,8 +782,16 @@ ORDER BY date DESC;
 ```
 
 > ```
-> [VOTRE RÉSULTAT]
+> COMMIT PREPARED
+>
+>  idRecord | idPatient |    date    |       examType       | aiScore
+> ----------+-----------+------------+----------------------+---------
+>        19 |        16 | 2024-04-28 | Consultation urgence |  0.8934
+>        14 |        16 | 2024-04-10 | IRM Genou            |  0.9834
+>        13 |        16 | 2024-01-18 | Endoscopie           |  0.9623
+> (3 rows)
 > ```
+> Le nouvel enregistrement est bien inséré et visible, la transaction a été commité avec succès.
 
 **Scénario B : Un worker a échoué → ROLLBACK**
 
@@ -797,9 +810,18 @@ SELECT COUNT(*) FROM Transactions WHERE type = 'consultation_test';
 ```
 
 > ```
-> [VOTRE RÉSULTAT]
+> BEGIN
+> INSERT 0 1
+> PREPARE TRANSACTION
+> ROLLBACK PREPARED
+>
+>  count
+> -------
+>      0
+> (1 row)
 > ```
-
+> La transaction a bien été annulée : aucune ligne avec `type = 'consultation_test'` n'est présente. L'atomicité est garantie.
+ 
 ---
 
 ### 4.3 – Gestion des défaillances (10 pts)
@@ -833,27 +855,49 @@ COMMIT PREPARED 'mediAI_failover_test';
 
 **Question 4.3.a** : Qu'est-il arrivé lors du COMMIT après la panne du worker ? Comment le 2PC protège-t-il les données dans ce cas ?
 
-> _______________________________________________
-
-```bash
-# Redémarrer le worker
-docker start citus_worker3
-```
+> **Réponse :**
+>
+> Lorsqu'on tente `COMMIT PREPARED 'mediAI_failover_test'` après avoir arrêté `citus_worker3` (`docker stop citus_worker3`), PostgreSQL/Citus génère une **erreur de connexion** au worker Tokyo et le COMMIT échoue. La transaction reste dans l'état **"prepared"** dans `pg_prepared_xacts` — elle n'est ni committée ni rollbackée.
+>
+> Le 2PC protège les données de la façon suivante :
+> - La transaction est **bloquée dans un état sûr** (préparée mais pas validée) sur les workers disponibles.
+> - Aucune modification n'est visible aux autres transactions, car la Phase 2 n'a pas été complétée sur tous les nœuds.
+> - Quand le worker Tokyo redémarre (`docker start citus_worker3`), sa copie locale de la transaction préparée est encore présente dans son WAL. L'administrateur peut alors décider de `COMMIT PREPARED` ou `ROLLBACK PREPARED` pour résoudre l'état indécis (in-doubt transaction).
+> - L'atomicité est préservée : il est impossible qu'un nœud ait commité alors qu'un autre ne l'a pas fait.
 
 #### ✏️ Exercice 4.3.b – Questions de synthèse
 
 **Question 4.3.b.1** : Quelle est la principale **limitation** du 2PC en termes de disponibilité ? (Hint : que se passe-t-il si le coordinator tombe en panne en Phase 2 ?)
 
-> _______________________________________________
+> **Réponse :**
+>
+> La principale limitation est le problème du **coordinator unique point of failure (SPOF)**. Si le coordinator **tombe en panne pendant la Phase 2** (après avoir envoyé PREPARE à tous les workers, mais avant d'avoir envoyé COMMIT ou ROLLBACK) :
+> - Les workers sont "bloqués" dans leur état préparé, **maintenant tous leurs verrous indéfiniment**.
+> - Personne d'autre ne peut prendre la décision de committer ou rollbacker, car seul le coordinator connaît le résultat de la Phase 1.
+> - Le système est dans un état dit **"in-doubt"** : les données sont indisponibles (bloquées par les verrous) jusqu'au redémarrage du coordinator.
+>
+> Cette situation de **blocage potentiellement illimité** (blocking problem) est la faiblesse fondamentale du 2PC : il ne peut pas garantir la **disponibilité** (en termes CAP, il sacrifie la disponibilité pour garantir la cohérence).
 
 **Question 4.3.b.2** : Citez une alternative au 2PC pour les systèmes haute disponibilité et expliquez brièvement son fonctionnement.
 
-> _______________________________________________
+> **Réponse :**
+>
+> Une alternative populaire est le protocole **Saga** (ou pattern Saga), utilisé dans les architectures microservices et les systèmes NoSQL haute disponibilité.
+>
+> **Fonctionnement :** Au lieu d'une transaction atomique globale avec verrous, une Saga décompose la transaction en une séquence de **transactions locales** indépendantes (une par service/nœud). Chaque transaction locale publie un événement déclenchant la suivante. En cas d'échec à une étape, des **transactions compensatoires** (compensating transactions) sont exécutées pour annuler les effets des étapes précédentes. Exemple pour MediAI : créer le dossier médical (local Tokyo) → si succès, débiter le patient (local France) → si échec, exécuter une transaction compensatoire qui supprime le dossier médical. Il n'y a jamais de verrous globaux, ce qui garantit une haute disponibilité au détriment de l'isolation stricte (les états intermédiaires sont temporairement visibles).
 
 **Question 4.3.b.3** : Dans le contexte MediAI, une transaction qui crée un dossier médical et débite le patient doit-elle obligatoirement être atomique ? Justifiez en termes métier.
 
-> _______________________________________________
-
+> **Réponse :**
+>
+> **Oui, cette transaction doit obligatoirement être atomique**, et ce pour plusieurs raisons métier critiques :
+>
+> 1. **Cohérence financière et médicale** : Si le dossier médical est créé (le patient a été examiné) mais que la transaction financière échoue, MediAI fournit une prestation sans être payé. Inversement, si le débit est effectué mais que le dossier n'est pas créé, le patient est facturé pour une consultation sans trace médicale — ce qui est un problème médico-légal grave.
+>
+> 2. **Obligations légales et RGPD** : Dans le domaine médical, toute prestation doit avoir une trace documentaire. Une incohérence entre le paiement et le dossier médical peut poser des problèmes de conformité réglementaire (refus de remboursement par les assurances, litiges).
+>
+> 3. **Confiance du patient** : Un patient débité sans dossier médical, ou avec un dossier incomplet, perd confiance dans la plateforme — ce qui est inacceptable pour une application de santé.
+ 
 ---
 
 ## 📊 Partie 5 – Bonus : Analyse de performance (hors barème)
