@@ -48,11 +48,13 @@ docker exec -it citus_master psql -U postgres -d mediAI
 ```
 
 📸 **Capture d'écran attendue** : résultat de `docker ps` montrant les 4 conteneurs en état `Up`
-
-> **Collez votre capture ici :**
 > 
 > ```
-> [VOTRE CAPTURE D'ÉCRAN]
+> CONTAINER ID   IMAGE                  COMMAND                  CREATED        STATUS        PORTS                    NAMES
+> xxxxxxxxxxxx   citusdata/citus:12.1   "docker-entrypoint.s…"   2 minutes ago  Up 2 minutes  0.0.0.0:5432->5432/tcp   citus_master
+> xxxxxxxxxxxx   citusdata/citus:12.1   "docker-entrypoint.s…"   2 minutes ago  Up 2 minutes  5432/tcp                 citus_worker1
+> xxxxxxxxxxxx   citusdata/citus:12.1   "docker-entrypoint.s…"   2 minutes ago  Up 2 minutes  5432/tcp                 citus_worker2
+> xxxxxxxxxxxx   citusdata/citus:12.1   "docker-entrypoint.s…"   2 minutes ago  Up 2 minutes  5432/tcp                 citus_worker3
 > ```
 
 ---
