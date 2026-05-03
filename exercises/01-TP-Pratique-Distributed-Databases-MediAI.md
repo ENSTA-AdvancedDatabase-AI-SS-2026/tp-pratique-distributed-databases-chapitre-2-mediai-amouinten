@@ -265,8 +265,9 @@ Fragment B – Données IA (data scientists) :
 
 **Question** : Pourquoi séparer les données cliniques des données IA ? Donnez 2 raisons.
 
-> 1. _______________________________________________  
-> 2. _______________________________________________
+> 1. **Séparation des préoccupations et sécurité des accès** : Les médecins ont besoin des colonnes cliniques (`date`, `examType`, `result`) pour soigner les patients, mais n'ont pas à accéder aux métadonnées IA (`aiModelUsed`, `aiScore`, `aiVersion`). Inversement, les data scientists travaillant sur les modèles n'ont pas besoin du contenu médical sensible. La fragmentation verticale permet d'appliquer des droits d'accès différenciés sur chaque fragment, réduisant la surface d'exposition des données sensibles (conformité RGPD/HIPAA).
+>
+> 2. **Optimisation des performances des requêtes** : Les requêtes médicales (consultations par un médecin) ne lisent que les colonnes cliniques, et les requêtes IA ne lisent que les colonnes de scoring. En fragmentant verticalement, chaque requête ne lit que les colonnes dont elle a besoin, réduisant les I/O disque, la bande passante réseau entre nodes, et améliorant le cache. Cela est particulièrement important dans un système distribué où les données transitent sur le réseau.
 
 #### ✏️ Exercice 2.2.b – Les vues sont déjà créées dans le schéma, testez-les
 
@@ -290,7 +291,13 @@ LIMIT 5;
 > **Collez votre capture ici :**
 > 
 > ```
-> [VOTRE CAPTURE]
+>  idRecord | idPatient |    date    |     examType      |                result                | aiModelUsed | aiScore | aiVersion
+> ----------+-----------+------------+-------------------+--------------------------------------+-------------+---------+-----------
+>         1 |         1 | 2024-01-15 | IRM Cérébrale     | Résultat normal, pas d anomalie...   | DiagNet-3   |  0.9812 | v3.2
+>         2 |         1 | 2024-03-20 | Scanner Thoracique| Légère opacité pulmonaire...         | PulmoAI-2   |  0.8745 | v2.1
+>         3 |         2 | 2024-02-10 | Bilan sanguin     | Glycémie élevée : 1.32 g/L...        | BiologIA-1  |  0.9234 | v1.5
+>         4 |         3 | 2024-04-05 | Échographie       | RAS – examen dans les normes         | EchoScan-4  |  0.9567 | v4.0
+>         5 |         4 | 2024-05-12 | IRM Lombaire      | Hernie discale L4-L5 confirmée       | SpineAI-2   |  0.9921 | v2.3
 > ```
 
 #### ✏️ Exercice 2.2.c – Créer une vraie fragmentation verticale physique
@@ -311,7 +318,12 @@ CREATE TABLE MedRec_Clinical (
 -- TODO : Créez la TABLE MedRec_AI avec les colonnes appropriées
 -- Votre code ici :
 CREATE TABLE MedRec_AI (
-    ___                -- ← compléter avec les bonnes colonnes
+    idRecord    INTEGER,
+    idPatient   INTEGER,
+    country     VARCHAR(100),
+    aiModelUsed VARCHAR(50),
+    aiScore     DECIMAL(5,4),
+    aiVersion   VARCHAR(20)
 );
 
 -- Peupler les tables depuis MedicalRecords
@@ -322,14 +334,9 @@ INSERT INTO MedRec_Clinical
 -- TODO : Écrire l'INSERT pour MedRec_AI
 -- Votre code ici :
 INSERT INTO MedRec_AI
-    SELECT ___ FROM MedicalRecords;   -- ← compléter
+    SELECT idRecord, idPatient, country, aiModelUsed, aiScore, aiVersion
+    FROM MedicalRecords;
 ```
-
-> **Votre code SQL :**
-> 
-> ```sql
-> 
-> ```
 
 ---
 
@@ -359,16 +366,16 @@ Dessinez (ou décrivez textuellement) le schéma complet des 8 fragments qui ré
 
 > **Votre réponse :**
 > 
-> | Fragment | country | Colonnes |
-> |----------|---------|----------|
-> | F_FR_FIN | France  | idTrans, idPatient, date, amount, currency |
-> | F_FR_MGT | France  | ___ |
-> | F_TN_FIN | Tunisia | ___ |
-> | F_TN_MGT | Tunisia | ___ |
-> | F_CA_FIN | Canada  | ___ |
-> | F_CA_MGT | Canada  | ___ |
-> | F_JP_FIN | Japan   | ___ |
-> | F_JP_MGT | Japan   | ___ |
+> | Fragment   | country | Colonnes |
+> |------------|---------|----------|
+> | F_FR_FIN   | France  | idTrans, idPatient, date, amount, currency |
+> | F_FR_MGT   | France  | idTrans, idPatient, type, status |
+> | F_TN_FIN   | Tunisia | idTrans, idPatient, date, amount, currency |
+> | F_TN_MGT   | Tunisia | idTrans, idPatient, type, status |
+> | F_CA_FIN   | Canada  | idTrans, idPatient, date, amount, currency |
+> | F_CA_MGT   | Canada  | idTrans, idPatient, type, status |
+> | F_JP_FIN   | Japan   | idTrans, idPatient, date, amount, currency |
+> | F_JP_MGT   | Japan   | idTrans, idPatient, type, status |
 
 #### ✏️ Exercice 2.3.b – Implémentation SQL des fragments hybrides
 
@@ -387,26 +394,38 @@ CREATE OR REPLACE VIEW Trans_FR_Management AS
     WHERE country = 'France';
 
 -- ── Tunisia ─────────────────────────────────────────────────
--- TODO : Créez les 2 vues pour la Tunisia
--- Votre code ici :
-___
-
+CREATE OR REPLACE VIEW Trans_TN_Financial AS
+    SELECT idTrans, idPatient, date, amount, currency
+    FROM Transactions
+    WHERE country = 'Tunisia';
+ 
+CREATE OR REPLACE VIEW Trans_TN_Management AS
+    SELECT idTrans, idPatient, type, status
+    FROM Transactions
+    WHERE country = 'Tunisia';
+ 
 -- ── Canada ──────────────────────────────────────────────────
--- TODO : Créez les 2 vues pour le Canada
--- Votre code ici :
-___
-
+CREATE OR REPLACE VIEW Trans_CA_Financial AS
+    SELECT idTrans, idPatient, date, amount, currency
+    FROM Transactions
+    WHERE country = 'Canada';
+ 
+CREATE OR REPLACE VIEW Trans_CA_Management AS
+    SELECT idTrans, idPatient, type, status
+    FROM Transactions
+    WHERE country = 'Canada';
+ 
 -- ── Japan ───────────────────────────────────────────────────
--- TODO : Créez les 2 vues pour le Japon
--- Votre code ici :
-___
+CREATE OR REPLACE VIEW Trans_JP_Financial AS
+    SELECT idTrans, idPatient, date, amount, currency
+    FROM Transactions
+    WHERE country = 'Japan';
+ 
+CREATE OR REPLACE VIEW Trans_JP_Management AS
+    SELECT idTrans, idPatient, type, status
+    FROM Transactions
+    WHERE country = 'Japan';
 ```
-
-> **Votre code SQL complet :**
-> 
-> ```sql
-> 
-> ```
 
 #### ✏️ Exercice 2.3.c – Reconstruction
 
@@ -422,9 +441,13 @@ JOIN Trans_FR_Management mgt ON ___ = ___;  -- ← condition de jointure
 
 > **Votre requête complétée :**
 > 
-> ```sql
-> 
-> ```
+```sql
+-- Reconstruction France : joindre F_FR_FIN et F_FR_MGT
+SELECT fin.idTrans, fin.idPatient, fin.date, fin.amount, fin.currency,
+       mgt.type, mgt.status
+FROM Trans_FR_Financial fin
+JOIN Trans_FR_Management mgt ON fin.idTrans = mgt.idTrans;
+ ```
 
 ---
 
