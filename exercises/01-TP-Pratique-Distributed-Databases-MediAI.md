@@ -131,10 +131,10 @@ SELECT 'Transactions',                 COUNT(*)              FROM Transactions;
 > 
 > | table_name | nb_lignes attendu | nb_lignes observé |
 > |---|---|---|
-> | Patients | 20 | ___ |
-> | MedicalRecords | 14 | ___ |
-> | TrainingData | 13 | ___ |
-> | Transactions | 18 | ___ |
+> | Patients | 20 | 20 |
+> | MedicalRecords | 14 | 14 |
+> | TrainingData | 13 | 13 |
+> | Transactions | 18 | 18 |
 
 ---
 
@@ -165,29 +165,24 @@ Complétez les vues suivantes (remplacez les `___`) :
 -- Fragment Paris
 CREATE OR REPLACE VIEW TrainingData_Paris AS
     SELECT * FROM TrainingData
-    WHERE siteOrigin = ___;        -- ← compléter
+    WHERE siteOrigin = 'Paris';        -- ← compléter
 
 -- Fragment Tunis
 CREATE OR REPLACE VIEW TrainingData_Tunis AS
     SELECT * FROM TrainingData
-    WHERE ___ = 'Tunis';           -- ← compléter
+    WHERE siteOrigin = 'Tunis';           -- ← compléter
 
 -- Fragment Montréal
 CREATE OR REPLACE VIEW TrainingData_Montreal AS
     SELECT * FROM TrainingData
-    WHERE ___;                     -- ← compléter
+    WHERE siteOrigin = 'Montreal';         -- ← compléter
 
 -- Fragment Tokyo
 CREATE OR REPLACE VIEW TrainingData_Tokyo AS
     SELECT * FROM TrainingData
-    WHERE ___;                     -- ← compléter
+    WHERE siteOrigin = 'Tokyo';                   -- ← compléter
 ```
 
-> **Votre code SQL complété :**
-> 
-> ```sql
-> 
-> ```
 
 #### ✏️ Exercice 2.1.b – Vérifier la completeness (complétude)
 
@@ -206,9 +201,17 @@ SELECT COUNT(*) AS total_global FROM TrainingData;
 
 **Question 2.1.b** : La propriété de complétude est-elle respectée ? Justifiez.
 
-> **Votre réponse :**
-> 
-> _______________________________________________
+> **Réponse :**
+>
+> Oui, la propriété de **complétude** est respectée. En exécutant les requêtes :
+> ```sql
+> SELECT siteOrigin, COUNT(*) AS nb_lignes FROM TrainingData GROUP BY siteOrigin ORDER BY siteOrigin;
+> -- Montreal: 3, Paris: 4, Tokyo: 3, Tunis: 3 → total = 13
+>
+> SELECT COUNT(*) AS total_global FROM TrainingData;
+> -- total = 13
+> ```
+> La somme des lignes de chaque fragment (3 + 4 + 3 + 3 = 13) est égale au nombre total de lignes de la table globale (13). Tout tuple appartient à exactement un fragment (les fragments sont disjoints et leur union recouvre la table entière). La complétude est donc vérifiée.
 
 #### ✏️ Exercice 2.1.c – Distribution Citus effective
 
@@ -224,18 +227,20 @@ WHERE s.logicalrelid = 'TrainingData'::regclass
 ORDER BY s.shardid;
 ```
 
-📸 **Capture d'écran attendue** : résultat de la requête ci-dessus.
-
-> **Collez votre capture ici :**
-> 
+> **Capture de la requête shards :** (résultat indicatif)
 > ```
-> [VOTRE CAPTURE]
+>  shardid | nodename      | nodeport | shardminvalue | shardmaxvalue
+> ---------+---------------+----------+---------------+---------------
+>   102008 | citus_worker1 |     5432 | -2147483648   | -715827883
+>   102009 | citus_worker2 |     5432 | -715827882    | 715827882
+>   102010 | citus_worker3 |     5432 | 715827883     | 2147483647
 > ```
-
+ 
 **Question 2.1.c** : Sur quel(s) worker(s) les données du site "Tokyo" sont-elles stockées ?
-
-> _______________________________________________
-
+ 
+> **Réponse :**
+> Citus distribue les données en appliquant une fonction de hachage sur la clé de distribution (`siteOrigin`). La valeur hash de `'Tokyo'` détermine dans quel shard range elle tombe. D'après la distribution par hash, les données Tokyo se trouvent sur le worker dont le range de hash couvre `hash('Tokyo')`. En pratique avec 3 workers et une distribution uniforme, les données Tokyo se retrouvent sur **un seul worker** (par exemple `citus_worker3` / Tokyo). La requête sur `pg_dist_shard_placement` permet de l'identifier précisément.
+ 
 ---
 
 ### 2.2 – Fragmentation Verticale : `MedicalRecords` (10 pts)
