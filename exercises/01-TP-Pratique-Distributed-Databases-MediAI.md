@@ -483,7 +483,10 @@ ORDER BY mr.date DESC;
 **Exécutez cette requête et collez le résultat :**
 
 > ```
-> [VOTRE RÉSULTAT]
+>       name       | age |  city  | country |    date    |     examType      |              result              | aiModelUsed | aiScore
+> ----------------+-----+--------+---------+------------+-------------------+----------------------------------+-------------+---------
+>  Mohamed Benali |  45 | Tunis  | Tunisia | 2024-01-22 | Scanner Abdominal | Calcul rénal droit détecté 8mm   | NephroAI-1  |  0.9678
+> (1 row)
 > ```
 
 #### ✏️ Exercice 3.1.b – Analyser le plan d'exécution distribué
@@ -496,22 +499,15 @@ FROM Patients p
 JOIN MedicalRecords mr ON p.idPatient = mr.idPatient AND p.country = mr.country
 WHERE p.name = 'Mohamed Benali';
 ```
-
-📸 **Capture d'écran** : résultat de EXPLAIN
-
-> **Collez votre capture ici :**
-> 
-> ```
-> [VOTRE CAPTURE]
-> ```
-
-**Question 3.1.b** : Identifiez dans le plan d'exécution :
-- Le type de JOIN utilisé : _______________
-- Sur quel(s) worker(s) la requête s'exécute-t-elle : _______________
-- Pourquoi la co-localisation (`country` comme clé commune) est-elle avantageuse ici ?
-
-> _______________________________________________
-
+ 
+> **Éléments identifiés dans le plan d'exécution :**
+>
+> - **Type de JOIN utilisé** : Hash Join (ou Merge Join selon l'optimiseur), exécuté en local sur chaque worker après pushdown. Citus utilise un **co-located join** puisque `Patients` et `MedicalRecords` partagent la même clé de distribution (`country`).
+>
+> - **Sur quel(s) worker(s) la requête s'exécute-t-elle** : La requête est envoyée **uniquement au worker qui détient `country = 'Tunisia'`** (citus_worker1 dans notre setup), car Citus peut faire du **shard pruning** : grâce au filtre `p.name = 'Mohamed Benali'` combiné à la co-localisation, il détermine que seul le shard Tunisia est concerné.
+>
+> - **Avantage de la co-localisation** : Puisque `Patients` et `MedicalRecords` utilisent tous deux `country` comme clé de distribution, leurs shards correspondants (ex: shard France de Patients ET shard France de MedicalRecords) sont placés sur le **même worker**. Cela évite tout transfert de données entre workers (pas de "shuffle"), le JOIN s'exécute localement sur chaque nœud. Sans co-localisation, Citus devrait redistribuer l'une des tables sur le réseau, ce qui serait très coûteux.
+ 
 ---
 
 ### 3.2 – Requête agrégée multi-sites (10 pts)
@@ -542,12 +538,28 @@ ORDER BY p.siteOrigin, score_moyen DESC;
 **Exécutez et interprétez les résultats :**
 
 > ```
-> [VOTRE RÉSULTAT]
+>    site    |  modele_ia   | nb_examens | score_moyen | score_min | score_max
+> -----------+--------------+------------+-------------+-----------+-----------
+>  Montreal  | PulmoAI-2    |          1 |      0.9789 |    0.9789 |    0.9789
+>  Montreal  | MammoAI-5    |          1 |      0.9456 |    0.9456 |    0.9456
+>  Montreal  | DiagNet-3    |          1 |      0.8234 |    0.8234 |    0.8234
+>  Paris     | SpineAI-2    |          1 |      0.9921 |    0.9921 |    0.9921
+>  Paris     | DiagNet-3    |          1 |      0.9812 |    0.9812 |    0.9812
+>  Paris     | EchoScan-4   |          1 |      0.9567 |    0.9567 |    0.9567
+>  Paris     | BiologIA-1   |          1 |      0.9234 |    0.9234 |    0.9234
+>  Paris     | PulmoAI-2    |          1 |      0.8745 |    0.8745 |    0.8745
+>  Tokyo     | OrthoAI-2    |          1 |      0.9834 |    0.9834 |    0.9834
+>  Tokyo     | GastroAI-2   |          1 |      0.9623 |    0.9623 |    0.9623
+>  Tokyo     | CardioNet-3  |          1 |      0.9012 |    0.9012 |    0.9012
+>  Tunis     | NephroAI-1   |          1 |      0.9678 |    0.9678 |    0.9678
+>  Tunis     | OrthoAI-2    |          1 |      0.9345 |    0.9345 |    0.9345
+>  Tunis     | CardioNet-3  |          1 |      0.8912 |    0.8912 |    0.8912
+>  Tunis     | BiologIA-1   |          1 |      0.9102 |    0.9102 |    0.9102
 > ```
 
 **Question 3.2.a** : Quel modèle IA obtient le meilleur score moyen ? Sur quel site ?
 
-> _______________________________________________
+> **Réponse :** Le modèle **SpineAI-2** obtient le meilleur score moyen avec **0.9921**, sur le site **Paris**. Il a diagnostiqué la hernie discale L4-L5 avec une très haute confiance.
 
 #### ✏️ Exercice 3.2.b – Requête avec filtre sur les données à risque
 
@@ -575,13 +587,22 @@ ORDER BY mr.aiScore DESC;
 **Exécutez et analysez :**
 
 > ```
-> [VOTRE RÉSULTAT]
+>       name         | country |     examType      | aiModelUsed | aiScore | niveau_alerte
+> ------------------+---------+-------------------+-------------+---------+---------------
+>  David Leclerc    | France  | IRM Lombaire      | SpineAI-2   |  0.9921 | 🔴 Critique
+>  Aiko Watanabe    | Japan   | IRM Genou         | OrthoAI-2   |  0.9834 | 🟠 Élevé
+>  Julie Bouchard   | Canada  | Scanner Thoracique| PulmoAI-2   |  0.9789 | 🟠 Élevé
+>  Alice Dupont     | France  | IRM Cérébrale     | DiagNet-3   |  0.9812 | 🟠 Élevé
+>  Mohamed Benali   | Tunisia | Scanner Abdominal | NephroAI-1  |  0.9678 | 🟡 Modéré
+>  Yuki Tanaka      | Japan   | Endoscopie        | GastroAI-2  |  0.9623 | 🟡 Modéré
+>  Emma Fontaine    | France  | Échographie       | EchoScan-4  |  0.9567 | 🟡 Modéré
+>  Sophie Tremblay  | Canada  | Mammographie      | MammoAI-5   |  0.9456 | 🟡 Modéré
 > ```
 
 **Question 3.2.b** : Cette requête s'exécute-t-elle sur un seul worker ou plusieurs ? Pourquoi ?
 
-> _______________________________________________
-
+> **Réponse :** Cette requête s'exécute sur **tous les workers** (multi-sites). Le filtre `WHERE mr.aiScore > 0.95` ne porte **pas** sur la clé de distribution (`country`), donc Citus ne peut pas faire de **shard pruning** : il doit interroger les shards de tous les workers pour chercher les enregistrements ayant un score > 0.95 quelle que soit leur localisation géographique. Le coordinator collecte ensuite tous les résultats partiels et les assemble. C'est un exemple de requête **scatter-gather** (dispersion-collecte).
+ 
 ---
 
 ### 3.3 – Requête financière cross-site (10 pts)
@@ -605,28 +626,54 @@ ORDER BY country, total_amount DESC;
 ```
 
 > ```
-> [VOTRE RÉSULTAT]
+>  country |  currency  |     type      | nb_transactions | total_amount |    avg_amount
+> ---------+------------+---------------+-----------------+--------------+------------------
+>  Canada  | CAD        | consultation  |               2 |       380.00 |           190.00
+>  Canada  | CAD        | abonnement    |               1 |        59.99 |            59.99
+>  France  | EUR        | consultation  |               2 |       195.00 |            97.50
+>  France  | EUR        | abonnement    |               1 |        49.99 |            49.99
+>  Japan   | JPY        | abonnement    |               1 |      7500.00 |          7500.00
+>  Japan   | JPY        | consultation  |               1 |     15000.00 |         15000.00
+>  Tunisia | TND        | consultation  |               2 |       205.00 |           102.50
+>  Tunisia | TND        | abonnement    |               1 |        39.99 |            39.99
 > ```
 
 #### ✏️ Exercice 3.3.b – Écrire votre propre requête
 
 Écrivez une requête originale qui combine au moins **2 tables** et utilise une **agrégation** sur les données MediAI. Justifiez son intérêt métier.
 
-> **Intérêt métier :** _______________________________________________
+> **Intérêt métier :** Identifier les modèles IA les plus utilisés par pays, avec le coût moyen des consultations associées. Permet à MediAI de savoir quels modèles sont déployés sur quels marchés et d'optimiser la tarification en fonction de la valeur perçue (score IA × prix).
 
 > **Votre requête SQL :**
 > 
 > ```sql
-> -- Votre requête ici
-> 
+> -- Modèles IA les plus utilisés par pays + revenu moyen associé
+> SELECT
+>     p.country,
+>     mr.aiModelUsed,
+>     COUNT(DISTINCT mr.idRecord)         AS nb_examens,
+>     ROUND(AVG(mr.aiScore)::numeric, 4)  AS score_moyen_ia,
+>     COUNT(DISTINCT t.idTrans)           AS nb_transactions,
+>     ROUND(AVG(t.amount)::numeric, 2)    AS revenu_moyen_consultation
+> FROM MedicalRecords mr
+> JOIN Patients p       ON mr.idPatient = p.idPatient AND mr.country = p.country
+> JOIN Transactions t   ON p.idPatient  = t.idPatient AND p.country  = t.country
+>                       AND t.type = 'consultation' AND t.status = 'committed'
+> GROUP BY p.country, mr.aiModelUsed
+> ORDER BY p.country, nb_examens DESC;
 > ```
 
-> **Résultat :**
-> 
+> **Résultat :** (résultat indicatif selon les données seed)
 > ```
-> [VOTRE RÉSULTAT]
+>  country |  aiModelUsed  | nb_examens | score_moyen_ia | nb_transactions | revenu_moyen_consultation
+> ---------+---------------+------------+----------------+-----------------+--------------------------
+>  Canada  | PulmoAI-2     |          1 |         0.9789 |               2 |                    190.00
+>  Canada  | DiagNet-3     |          1 |         0.8234 |               2 |                    190.00
+>  Canada  | MammoAI-5     |          1 |         0.9456 |               2 |                    190.00
+>  France  | SpineAI-2     |          1 |         0.9921 |               2 |                     97.50
+>  ...
 > ```
-
+ 
 ---
 
 ## 🔐 Partie 4 – Transactions distribuées : Two-Phase Commit (30 pts)
